@@ -79,24 +79,49 @@ jobs:
           git clone --depth 1 https://github.com/DCurrent/openbor openbor-src
           sudo rm -rf /usr/include/SDL2
 
+      - name: Criar headers minimos para PS4
+        run: |
+          mkdir -p ps4-shim/sys
+          cat > ps4-shim/sys/sysinfo.h << 'EOF'
+          #ifndef PS4_SYSINFO_H
+          #define PS4_SYSINFO_H
+          struct sysinfo { unsigned long uptime; unsigned long totalram; unsigned long freeram; unsigned int mem_unit; };
+          static inline int sysinfo(struct sysinfo *i) { i->uptime = 0; i->totalram = 4UL * 1024 * 1024 * 1024; i->freeram = 2UL * 1024 * 1024 * 1024; i->mem_unit = 1; return 0; }
+          #endif
+          EOF
+          cat > ps4-shim/features.h << 'EOF'
+          #if __has_include_next(<features.h>)
+          #include_next <features.h>
+          #endif
+          EOF
+          cat > ps4-shim/malloc.h << 'EOF'
+          #if __has_include_next(<malloc.h>)
+          #include_next <malloc.h>
+          #else
+          #include <stdlib.h>
+          #endif
+          EOF
+          ls -R ps4-shim
+
       - name: Inventario
         if: always()
         run: |
           {
             echo "== libs prontas =="
             ls "$OO_PS4_TOOLCHAIN/lib" | grep -E "^lib(z|png|ogg|vorbis|vorbisfile|vorbisenc|SDL2.*)\.a$" || true
-            echo "== onde aparece SDL2 nos arquivos cmake =="
-            grep -rn "SDL2" openbor-src --include=CMakeLists.txt --include=*.cmake | head -20 || true
+            echo "== cmake/linux.cmake =="
+            head -70 openbor-src/cmake/linux.cmake || true
           } 2>&1 | tee inventario.txt
 
       - name: Configurar OpenBOR
         id: cfg
         continue-on-error: true
         run: |
-          CF="-nostdlibinc -fPIC -funwind-tables -isysroot $OO_PS4_TOOLCHAIN -isystem $OO_PS4_TOOLCHAIN/include -isystem $OO_PS4_TOOLCHAIN/include/SDL2"
+          CF="-nostdlibinc -fPIC -funwind-tables -isysroot $OO_PS4_TOOLCHAIN -isystem $GITHUB_WORKSPACE/ps4-shim -isystem $OO_PS4_TOOLCHAIN/include -isystem $OO_PS4_TOOLCHAIN/include/SDL2"
           LIBS="-lc -lkernel -lc++ -lSceUserService -lSceVideoOut -lSceAudioOut -lScePad -lSceSysmodule -lSceFreeType"
           cmake -S openbor-src -B openbor-src/build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake" \
+            -DCMAKE_PREFIX_PATH="$OO_PS4_TOOLCHAIN" \
             -DCMAKE_C_FLAGS="$CF" \
             -DCMAKE_C_STANDARD_LIBRARIES="$LIBS" \
             -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=lld -nostdlib -Wl,-m,elf_x86_64 -Wl,-pie -Wl,--script,$OO_PS4_TOOLCHAIN/link.x -Wl,--eh-frame-hdr -L$OO_PS4_TOOLCHAIN/lib $OO_PS4_TOOLCHAIN/lib/crt1.o" \
@@ -113,24 +138,8 @@ jobs:
         if: always()
         run: |
           {
-            echo "== problemas nas dependencias =="; grep -E "CMake Error|error:|FAILED|Could NOT|not found" deps.log 2>/dev/null | tail -10 || true
-            echo "== configure (ultimas linhas) =="; tail -8 configure.log 2>/dev/null || echo "sem configure.log"
-            echo "== flags do primeiro arquivo que falhou =="
-            grep -m1 "^/usr/bin/clang" build.log 2>/dev/null | tr ' ' '\n' | grep -E "^-(I|isystem|isysroot|nostdlibinc|-target|D)|PS4Toolchain|openbor-src/engine$" | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | head -40 || true
+            echo "== configure (ultimas linhas) =="; tail -6 configure.log 2>/dev/null || echo "sem configure.log"
+            echo "== flags -I do primeiro arquivo que falhou =="
+            grep -m1 "^/usr/bin/clang" build.log 2>/dev/null | tr ' ' '\n' | grep -E "^-I" | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | head -6 || true
             echo "== primeiros erros completos =="
-            grep -m1 -B1 -A12 "error:" build.log 2>/dev/null | cut -c1-220 || true
-            echo "== erros do build (mais frequentes) =="
-            grep -E "error:|fatal error:|undefined reference|cannot find" build.log 2>/dev/null | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | sort | uniq -c | sort -rn | head -30 || true
-            echo "== total de erros =="; grep -c "error:" build.log 2>/dev/null || echo 0
-          } 2>&1 | tee resumo.txt
-
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: logs-fase2
-          path: |
-            resumo.txt
-            inventario.txt
-            deps.log
-            configure.log
-            build.log
+            grep -m3 -B1 -A6 "error:" build.log 2>/dev/null | cut -c1-220 || tr
