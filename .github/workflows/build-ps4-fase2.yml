@@ -1,0 +1,61 @@
+name: OpenBOR PS4 - Fase 2 (compilacao)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dependencias
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang lld cmake ninja-build git
+
+      - name: Toolchain OpenOrbis
+        run: |
+          mkdir tc
+          gh release download v0.5.4 -R OpenOrbis/OpenOrbis-PS4-Toolchain -p 'toolchain-llvm-18.tar.gz' -D tc
+          tar xzf tc/toolchain-llvm-18.tar.gz -C tc
+          LINK=$(find tc -name link.x | head -1)
+          test -n "$LINK"
+          echo "OO_PS4_TOOLCHAIN=$GITHUB_WORKSPACE/$(dirname "$LINK")" >> "$GITHUB_ENV"
+
+      - name: Inventario do toolchain
+        run: |
+          {
+            echo "== raiz =="; ls "$OO_PS4_TOOLCHAIN"
+            echo "== lib =="; ls "$OO_PS4_TOOLCHAIN/lib"
+            echo "== include (SDL, png, zlib, ogg, vorbis) =="; ls "$OO_PS4_TOOLCHAIN/include" | grep -iE "sdl|png|zlib|zconf|ogg|vorbis" || true
+            echo "== bin =="; ls "$OO_PS4_TOOLCHAIN/bin" "$OO_PS4_TOOLCHAIN/bin/linux" || true
+          } 2>&1 | tee inventario.txt
+
+      - name: Baixar OpenBOR
+        run: git clone --depth 1 https://github.com/DCurrent/openbor openbor-src
+
+      - name: Configurar (CMake)
+        id: cfg
+        continue-on-error: true
+        run: |
+          cmake -S openbor-src -B build -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake" \
+            -DBUILD_LINUX=ON -DUSE_OPENGL=OFF -DUSE_LOADGL=OFF \
+            -DUSE_WEBM=OFF -DUSE_GFX=OFF -DUSE_PTHREAD=OFF 2>&1 | tee configure.log
+
+      - name: Compilar
+        if: steps.cfg.outcome == 'success'
+        continue-on-error: true
+        run: cmake --build build -- -k 0 2>&1 | tee build.log
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-fase2
+          path: |
+            inventario.txt
+            configure.log
+            build.log
