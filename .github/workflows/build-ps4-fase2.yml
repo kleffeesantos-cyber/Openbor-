@@ -74,20 +74,23 @@ jobs:
           cmake --build deps-vorbis/b 2>&1 | tee -a deps.log
           cmake --install deps-vorbis/b 2>&1 | tee -a deps.log
 
-      - name: Baixar OpenBOR e apontar para o SDL2 do PS4
+      - name: Baixar OpenBOR
         run: |
           git clone --depth 1 https://github.com/DCurrent/openbor openbor-src
-          grep -rl "/usr/include/SDL2" openbor-src --include=CMakeLists.txt --include=*.cmake | xargs -r sed -i "s#/usr/include/SDL2#$OO_PS4_TOOLCHAIN/include/SDL2#g"
+          grep -rl "/usr/include/SDL2" openbor-src --include=CMakeLists.txt --include=*.cmake | xargs -r sed -i "s#/usr/include/SDL2#$OO_PS4_TOOLCHAIN/include/SDL2#g" || true
 
       - name: Inventario
+        if: always()
         run: |
           {
             echo "== libs prontas =="
             ls "$OO_PS4_TOOLCHAIN/lib" | grep -E "^lib(z|png|png16|ogg|vorbis|vorbisfile|vorbisenc|SDL2.*)\.a$" || true
             echo "== headers =="
             ls "$OO_PS4_TOOLCHAIN/include" | grep -iE "^(png|zlib|zconf|ogg|vorbis)" || true
+            echo "== CMake (SDL2) =="
+            grep -n -iE "sdl2|sdl-config|pkg_|find_package" openbor-src/CMakeLists.txt | head -40 || true
             echo "== ram.c (sysinfo/LINUX) =="
-            grep -n -B2 -A12 "sysinfo\|LINUX" openbor-src/engine/source/ramlib/ram.c | head -90
+            grep -n -B2 -A12 "sysinfo\|LINUX" openbor-src/engine/source/ramlib/ram.c | head -90 || true
           } 2>&1 | tee inventario.txt
 
       - name: Configurar OpenBOR
@@ -114,7 +117,7 @@ jobs:
         if: always()
         run: |
           {
-            echo "== fim do deps.log (libpng) =="; grep -iE "error|not found|could not|fail" deps.log 2>/dev/null | tail -15 || true
+            echo "== problemas nas dependencias =="; grep -E "CMake Error|error:|FAILED|Could NOT|not found" deps.log 2>/dev/null | tail -15 || true
             echo "== configure (ultimas linhas) =="; tail -15 configure.log 2>/dev/null || echo "sem configure.log"
             echo "== erros do build (mais frequentes) =="
             grep -E "error:|fatal error:|undefined reference|cannot find" build.log 2>/dev/null | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | sort | uniq -c | sort -rn | head -40 || true
@@ -129,5 +132,3 @@ jobs:
             resumo.txt
             inventario.txt
             deps.log
-            configure.log
-            build.log
