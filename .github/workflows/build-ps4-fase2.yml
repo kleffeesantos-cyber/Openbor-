@@ -14,10 +14,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Dependencias do runner
+      - name: Ferramentas do runner
         run: |
-          sudo apt-get update
-          sudo apt-get install -y clang lld cmake ninja-build git
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq clang lld cmake ninja-build git
 
       - name: Toolchain OpenOrbis
         run: |
@@ -25,121 +25,71 @@ jobs:
           gh release download v0.5.4 -R OpenOrbis/OpenOrbis-PS4-Toolchain -p 'toolchain-llvm-18.tar.gz' -D tc
           tar xzf tc/toolchain-llvm-18.tar.gz -C tc
           LINK=$(find tc -name link.x | head -1)
-          test -n "$LINK"
           echo "OO_PS4_TOOLCHAIN=$GITHUB_WORKSPACE/$(dirname "$LINK")" >> "$GITHUB_ENV"
 
-      - name: Compilar zlib
+      - name: Bibliotecas (zlib, png, ogg, vorbis)
         continue-on-error: true
         run: |
-          git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib deps-zlib
-          cmake -S deps-zlib -B deps-zlib/b -G Ninja -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake" 2>&1 | tee -a deps.log
-          cmake --build deps-zlib/b --target zlibstatic 2>&1 | tee -a deps.log
-          cp deps-zlib/zlib.h deps-zlib/b/zconf.h "$OO_PS4_TOOLCHAIN/include/"
-          cp deps-zlib/b/libz.a "$OO_PS4_TOOLCHAIN/lib/"
+          T="-G Ninja -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/ps4/toolchain.cmake"
+          O="$OO_PS4_TOOLCHAIN"
+          P="-DCMAKE_INSTALL_PREFIX=$O -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF"
+          git clone -q --depth 1 --branch v1.3.1 https://github.com/madler/zlib z
+          cmake -S z -B z/b $T > /dev/null
+          cmake --build z/b --target zlibstatic > /dev/null
+          cp z/zlib.h z/b/zconf.h $O/include/
+          cp z/b/libzlibstatic.a $O/lib/libz.a
+          git clone -q --depth 1 --branch v1.6.43 https://github.com/pnggroup/libpng p
+          cmake -S p -B p/b $T $P -DZLIB_ROOT=$O -DZLIB_LIBRARY=$O/lib/libz.a -DZLIB_INCLUDE_DIR=$O/include -DPNG_SHARED=OFF -DPNG_STATIC=ON -DPNG_TESTS=OFF -DPNG_TOOLS=OFF -DPNG_HARDWARE_OPTIMIZATIONS=OFF > /dev/null
+          cmake --build p/b > /dev/null && cmake --install p/b > /dev/null
+          git clone -q --depth 1 --branch v1.3.5 https://github.com/xiph/ogg o
+          cmake -S o -B o/b $T $P -DINSTALL_DOCS=OFF > /dev/null
+          cmake --build o/b > /dev/null && cmake --install o/b > /dev/null
+          git clone -q --depth 1 --branch v1.3.7 https://github.com/xiph/vorbis v
+          cmake -S v -B v/b $T $P > /dev/null
+          cmake --build v/b > /dev/null && cmake --install v/b > /dev/null
+          ls $O/lib | grep -E "^lib(z|png|ogg|vorbis.*)\.a$"
 
-      - name: Compilar libpng
-        continue-on-error: true
+      - name: Headers minimos
         run: |
-          git clone --depth 1 --branch v1.6.43 https://github.com/pnggroup/libpng deps-png
-          cmake -S deps-png -B deps-png/b -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake" \
-            -DCMAKE_INSTALL_PREFIX="$OO_PS4_TOOLCHAIN" \
-            -DZLIB_ROOT="$OO_PS4_TOOLCHAIN" \
-            -DZLIB_LIBRARY="$OO_PS4_TOOLCHAIN/lib/libz.a" \
-            -DZLIB_INCLUDE_DIR="$OO_PS4_TOOLCHAIN/include" \
-            -DPNG_SHARED=OFF -DPNG_STATIC=ON -DPNG_TESTS=OFF -DPNG_TOOLS=OFF \
-            -DPNG_HARDWARE_OPTIMIZATIONS=OFF -DPNG_FRAMEWORK=OFF 2>&1 | tee -a deps.log
-          cmake --build deps-png/b 2>&1 | tee -a deps.log
-          cmake --install deps-png/b 2>&1 | tee -a deps.log
-
-      - name: Compilar libogg
-        continue-on-error: true
-        run: |
-          git clone --depth 1 --branch v1.3.5 https://github.com/xiph/ogg deps-ogg
-          cmake -S deps-ogg -B deps-ogg/b -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake" \
-            -DCMAKE_INSTALL_PREFIX="$OO_PS4_TOOLCHAIN" \
-            -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DINSTALL_DOCS=OFF 2>&1 | tee -a deps.log
-          cmake --build deps-ogg/b 2>&1 | tee -a deps.log
-          cmake --install deps-ogg/b 2>&1 | tee -a deps.log
-
-      - name: Compilar libvorbis
-        continue-on-error: true
-        run: |
-          git clone --depth 1 --branch v1.3.7 https://github.com/xiph/vorbis deps-vorbis
-          cmake -S deps-vorbis -B deps-vorbis/b -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake" \
-            -DCMAKE_INSTALL_PREFIX="$OO_PS4_TOOLCHAIN" \
-            -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF 2>&1 | tee -a deps.log
-          cmake --build deps-vorbis/b 2>&1 | tee -a deps.log
-          cmake --install deps-vorbis/b 2>&1 | tee -a deps.log
-
-      - name: Baixar OpenBOR
-        run: |
-          git clone --depth 1 https://github.com/DCurrent/openbor openbor-src
-          sudo rm -rf /usr/include/SDL2
-
-      - name: Criar headers minimos para PS4
-        run: |
-          mkdir -p ps4-shim/sys
-          cat > ps4-shim/sys/sysinfo.h << 'EOF'
-          #ifndef PS4_SYSINFO_H
-          #define PS4_SYSINFO_H
-          struct sysinfo { unsigned long uptime; unsigned long totalram; unsigned long freeram; unsigned int mem_unit; };
-          static inline int sysinfo(struct sysinfo *i) { i->uptime = 0; i->totalram = 4UL * 1024 * 1024 * 1024; i->freeram = 2UL * 1024 * 1024 * 1024; i->mem_unit = 1; return 0; }
-          #endif
-          EOF
-          cat > ps4-shim/features.h << 'EOF'
-          #if __has_include_next(<features.h>)
-          #include_next <features.h>
-          #endif
-          EOF
-          cat > ps4-shim/malloc.h << 'EOF'
-          #if __has_include_next(<malloc.h>)
-          #include_next <malloc.h>
-          #else
-          #include <stdlib.h>
-          #endif
-          EOF
-          ls -R ps4-shim
-
-      - name: Inventario
-        if: always()
-        run: |
-          {
-            echo "== libs prontas =="
-            ls "$OO_PS4_TOOLCHAIN/lib" | grep -E "^lib(z|png|ogg|vorbis|vorbisfile|vorbisenc|SDL2.*)\.a$" || true
-            echo "== cmake/linux.cmake =="
-            head -70 openbor-src/cmake/linux.cmake || true
-          } 2>&1 | tee inventario.txt
+          mkdir -p sh/sys
+          echo '#pragma once' > sh/sys/sysinfo.h
+          echo 'struct sysinfo{unsigned long uptime,totalram,freeram;unsigned mem_unit;};static inline int sysinfo(struct sysinfo*i){i->uptime=0;i->totalram=4UL<<30;i->freeram=2UL<<30;i->mem_unit=1;return 0;}' >> sh/sys/sysinfo.h
+          printf '#if __has_include_next(<features.h>)\n#include_next <features.h>\n#endif\n' > sh/features.h
+          printf '#if __has_include_next(<malloc.h>)\n#include_next <malloc.h>\n#else\n#include <stdlib.h>\n#endif\n' > sh/malloc.h
 
       - name: Configurar OpenBOR
         id: cfg
         continue-on-error: true
         run: |
-          CF="-nostdlibinc -fPIC -funwind-tables -isysroot $OO_PS4_TOOLCHAIN -isystem $GITHUB_WORKSPACE/ps4-shim -isystem $OO_PS4_TOOLCHAIN/include -isystem $OO_PS4_TOOLCHAIN/include/SDL2"
+          git clone -q --depth 1 https://github.com/DCurrent/openbor openbor-src
+          O="$OO_PS4_TOOLCHAIN"
+          CF="-nostdlibinc -fPIC -funwind-tables -isysroot $O -isystem $GITHUB_WORKSPACE/sh -isystem $O/include -isystem $O/include/SDL2"
           LIBS="-lc -lkernel -lc++ -lSceUserService -lSceVideoOut -lSceAudioOut -lScePad -lSceSysmodule -lSceFreeType"
-          cmake -S openbor-src -B openbor-src/build -G Ninja \
-            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake" \
-            -DCMAKE_PREFIX_PATH="$OO_PS4_TOOLCHAIN" \
-            -DCMAKE_C_FLAGS="$CF" \
-            -DCMAKE_C_STANDARD_LIBRARIES="$LIBS" \
-            -DCMAKE_EXE_LINKER_FLAGS="-fuse-ld=lld -nostdlib -Wl,-m,elf_x86_64 -Wl,-pie -Wl,--script,$OO_PS4_TOOLCHAIN/link.x -Wl,--eh-frame-hdr -L$OO_PS4_TOOLCHAIN/lib $OO_PS4_TOOLCHAIN/lib/crt1.o" \
-            -DBUILD_LINUX=ON -DUSE_OPENGL=OFF -DUSE_LOADGL=OFF \
-            -DUSE_WEBM=OFF -DUSE_GFX=OFF -DUSE_PTHREAD=OFF \
-            -DENABLE_STATIC_SDL=ON 2>&1 | tee configure.log
+          LD="-fuse-ld=lld -nostdlib -Wl,-m,elf_x86_64 -Wl,-pie -Wl,--script,$O/link.x -Wl,--eh-frame-hdr -L$O/lib $O/lib/crt1.o"
+          cmake -S openbor-src -B openbor-src/build -G Ninja -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/ps4/toolchain.cmake -DCMAKE_PREFIX_PATH=$O -DCMAKE_C_FLAGS="$CF" -DCMAKE_C_STANDARD_LIBRARIES="$LIBS" -DCMAKE_EXE_LINKER_FLAGS="$LD" -DBUILD_LINUX=ON -DUSE_OPENGL=OFF -DUSE_LOADGL=OFF -DUSE_WEBM=OFF -DUSE_GFX=OFF -DUSE_PTHREAD=OFF -DENABLE_STATIC_SDL=ON 2>&1 | tee configure.log
 
       - name: Compilar OpenBOR
         if: steps.cfg.outcome == 'success'
         continue-on-error: true
         run: cmake --build openbor-src/build -- -k 0 2>&1 | tee build.log
 
-      - name: Resumo dos erros
+      - name: Resumo
         if: always()
+        continue-on-error: true
         run: |
-          {
-            echo "== configure (ultimas linhas) =="; tail -6 configure.log 2>/dev/null || echo "sem configure.log"
-            echo "== flags -I do primeiro arquivo que falhou =="
-            grep -m1 "^/usr/bin/clang" build.log 2>/dev/null | tr ' ' '\n' | grep -E "^-I" | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | head -6 || true
-            echo "== primeiros erros completos =="
-            grep -m3 -B1 -A6 "error:" build.log 2>/dev/null | cut -c1-220 || tr
+          set +e
+          R=resumo.txt
+          grep -E "error:|undefined" build.log | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | sort | uniq -c | sort -rn | head -25 > $R
+          grep -c "error:" build.log >> $R
+          grep -m3 -A5 "error:" build.log | cut -c1-200 >> $R
+          tail -4 configure.log >> $R
+          cat $R
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: logs-fase2
+          path: |
+            resumo.txt
+            configure.log
+            build.log
