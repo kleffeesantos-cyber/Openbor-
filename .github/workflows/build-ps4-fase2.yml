@@ -8,10 +8,13 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       GH_TOKEN: ${{ github.token }}
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
 
-      - name: Dependencias
+      - name: Dependencias do runner
         run: |
           sudo apt-get update
           sudo apt-get install -y clang lld cmake ninja-build git
@@ -25,37 +28,93 @@ jobs:
           test -n "$LINK"
           echo "OO_PS4_TOOLCHAIN=$GITHUB_WORKSPACE/$(dirname "$LINK")" >> "$GITHUB_ENV"
 
-      - name: Inventario do toolchain
+      - name: Compilar zlib
+        continue-on-error: true
+        run: |
+          git clone --depth 1 --branch v1.3.1 https://github.com/madler/zlib deps-zlib
+          cmake -S deps-zlib -B deps-zlib/b -G Ninja -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake"
+          cmake --build deps-zlib/b --target zlibstatic
+          cp deps-zlib/zlib.h deps-zlib/b/zconf.h "$OO_PS4_TOOLCHAIN/include/"
+          cp deps-zlib/b/libz.a "$OO_PS4_TOOLCHAIN/lib/"
+          ls "$OO_PS4_TOOLCHAIN/lib/libz.a"
+
+      - name: Compilar libpng
+        continue-on-error: true
+        run: |
+          git clone --depth 1 --branch v1.6.43 https://github.com/pnggroup/libpng deps-png
+          cmake -S deps-png -B deps-png/b -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake" \
+            -DCMAKE_INSTALL_PREFIX="$OO_PS4_TOOLCHAIN" \
+            -DPNG_SHARED=OFF -DPNG_STATIC=ON -DPNG_TESTS=OFF -DPNG_TOOLS=OFF -DPNG_EXECUTABLES=OFF
+          cmake --build deps-png/b
+          cmake --install deps-png/b
+
+      - name: Compilar libogg
+        continue-on-error: true
+        run: |
+          git clone --depth 1 --branch v1.3.5 https://github.com/xiph/ogg deps-ogg
+          cmake -S deps-ogg -B deps-ogg/b -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake" \
+            -DCMAKE_INSTALL_PREFIX="$OO_PS4_TOOLCHAIN" \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF -DINSTALL_DOCS=OFF
+          cmake --build deps-ogg/b
+          cmake --install deps-ogg/b
+
+      - name: Compilar libvorbis
+        continue-on-error: true
+        run: |
+          git clone --depth 1 --branch v1.3.7 https://github.com/xiph/vorbis deps-vorbis
+          cmake -S deps-vorbis -B deps-vorbis/b -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake" \
+            -DCMAKE_INSTALL_PREFIX="$OO_PS4_TOOLCHAIN" \
+            -DBUILD_SHARED_LIBS=OFF -DBUILD_TESTING=OFF
+          cmake --build deps-vorbis/b
+          cmake --install deps-vorbis/b
+
+      - name: Inventario das bibliotecas
         run: |
           {
-            echo "== raiz =="; ls "$OO_PS4_TOOLCHAIN"
-            echo "== lib =="; ls "$OO_PS4_TOOLCHAIN/lib"
-            echo "== include (SDL, png, zlib, ogg, vorbis) =="; ls "$OO_PS4_TOOLCHAIN/include" | grep -iE "sdl|png|zlib|zconf|ogg|vorbis" || true
-            echo "== bin =="; ls "$OO_PS4_TOOLCHAIN/bin" "$OO_PS4_TOOLCHAIN/bin/linux" || true
+            echo "== libs prontas =="
+            ls "$OO_PS4_TOOLCHAIN/lib" | grep -E "^lib(z|png|png16|ogg|vorbis|vorbisfile|vorbisenc|SDL2.*)\.a$" || true
+            echo "== headers =="
+            ls "$OO_PS4_TOOLCHAIN/include" | grep -iE "^(png|zlib|zconf|ogg|vorbis)" || true
           } 2>&1 | tee inventario.txt
 
       - name: Baixar OpenBOR
         run: git clone --depth 1 https://github.com/DCurrent/openbor openbor-src
 
-      - name: Configurar (CMake)
+      - name: Configurar OpenBOR
         id: cfg
         continue-on-error: true
         run: |
-          cmake -S openbor-src -B build -G Ninja \
+          cmake -S openbor-src -B openbor-src/build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake" \
+            -DCMAKE_C_FLAGS="-isystem $OO_PS4_TOOLCHAIN/include/SDL2" \
             -DBUILD_LINUX=ON -DUSE_OPENGL=OFF -DUSE_LOADGL=OFF \
-            -DUSE_WEBM=OFF -DUSE_GFX=OFF -DUSE_PTHREAD=OFF 2>&1 | tee configure.log
+            -DUSE_WEBM=OFF -DUSE_GFX=OFF -DUSE_PTHREAD=OFF \
+            -DENABLE_STATIC_SDL=ON 2>&1 | tee configure.log
 
-      - name: Compilar
+      - name: Compilar OpenBOR
         if: steps.cfg.outcome == 'success'
         continue-on-error: true
-        run: cmake --build build -- -k 0 2>&1 | tee build.log
+        run: cmake --build openbor-src/build -- -k 0 2>&1 | tee build.log
+
+      - name: Resumo dos erros
+        if: always()
+        run: |
+          {
+            echo "== configure (ultimas linhas) =="; tail -25 configure.log 2>/dev/null || echo "sem configure.log"
+            echo "== erros do build (mais frequentes) =="
+            grep -E "error:|fatal error:|undefined reference|cannot find" build.log 2>/dev/null | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | sort | uniq -c | sort -rn | head -40 || true
+            echo "== total de erros =="; grep -c "error:" build.log 2>/dev/null || echo 0
+          } 2>&1 | tee resumo.txt
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: logs-fase2
           path: |
+            resumo.txt
             inventario.txt
             configure.log
             build.log
