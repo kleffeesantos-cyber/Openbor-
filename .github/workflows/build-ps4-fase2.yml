@@ -77,27 +77,23 @@ jobs:
       - name: Baixar OpenBOR
         run: |
           git clone --depth 1 https://github.com/DCurrent/openbor openbor-src
-          grep -rl "/usr/include/SDL2" openbor-src --include=CMakeLists.txt --include=*.cmake | xargs -r sed -i "s#/usr/include/SDL2#$OO_PS4_TOOLCHAIN/include/SDL2#g" || true
+          sudo rm -rf /usr/include/SDL2
 
       - name: Inventario
         if: always()
         run: |
           {
             echo "== libs prontas =="
-            ls "$OO_PS4_TOOLCHAIN/lib" | grep -E "^lib(z|png|png16|ogg|vorbis|vorbisfile|vorbisenc|SDL2.*)\.a$" || true
-            echo "== headers =="
-            ls "$OO_PS4_TOOLCHAIN/include" | grep -iE "^(png|zlib|zconf|ogg|vorbis)" || true
-            echo "== CMake (SDL2) =="
-            grep -n -iE "sdl2|sdl-config|pkg_|find_package" openbor-src/CMakeLists.txt | head -40 || true
-            echo "== ram.c (sysinfo/LINUX) =="
-            grep -n -B2 -A12 "sysinfo\|LINUX" openbor-src/engine/source/ramlib/ram.c | head -90 || true
+            ls "$OO_PS4_TOOLCHAIN/lib" | grep -E "^lib(z|png|ogg|vorbis|vorbisfile|vorbisenc|SDL2.*)\.a$" || true
+            echo "== onde aparece SDL2 nos arquivos cmake =="
+            grep -rn "SDL2" openbor-src --include=CMakeLists.txt --include=*.cmake | head -20 || true
           } 2>&1 | tee inventario.txt
 
       - name: Configurar OpenBOR
         id: cfg
         continue-on-error: true
         run: |
-          CF="-fPIC -funwind-tables -isysroot $OO_PS4_TOOLCHAIN -isystem $OO_PS4_TOOLCHAIN/include -isystem $OO_PS4_TOOLCHAIN/include/SDL2"
+          CF="-nostdlibinc -fPIC -funwind-tables -isysroot $OO_PS4_TOOLCHAIN -isystem $OO_PS4_TOOLCHAIN/include -isystem $OO_PS4_TOOLCHAIN/include/SDL2"
           LIBS="-lc -lkernel -lc++ -lSceUserService -lSceVideoOut -lSceAudioOut -lScePad -lSceSysmodule -lSceFreeType"
           cmake -S openbor-src -B openbor-src/build -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE="$GITHUB_WORKSPACE/ps4/toolchain.cmake" \
@@ -117,10 +113,14 @@ jobs:
         if: always()
         run: |
           {
-            echo "== problemas nas dependencias =="; grep -E "CMake Error|error:|FAILED|Could NOT|not found" deps.log 2>/dev/null | tail -15 || true
-            echo "== configure (ultimas linhas) =="; tail -15 configure.log 2>/dev/null || echo "sem configure.log"
+            echo "== problemas nas dependencias =="; grep -E "CMake Error|error:|FAILED|Could NOT|not found" deps.log 2>/dev/null | tail -10 || true
+            echo "== configure (ultimas linhas) =="; tail -8 configure.log 2>/dev/null || echo "sem configure.log"
+            echo "== flags do primeiro arquivo que falhou =="
+            grep -m1 "^/usr/bin/clang" build.log 2>/dev/null | tr ' ' '\n' | grep -E "^-(I|isystem|isysroot|nostdlibinc|-target|D)|PS4Toolchain|openbor-src/engine$" | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | head -40 || true
+            echo "== primeiros erros completos =="
+            grep -m1 -B1 -A12 "error:" build.log 2>/dev/null | cut -c1-220 || true
             echo "== erros do build (mais frequentes) =="
-            grep -E "error:|fatal error:|undefined reference|cannot find" build.log 2>/dev/null | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | sort | uniq -c | sort -rn | head -40 || true
+            grep -E "error:|fatal error:|undefined reference|cannot find" build.log 2>/dev/null | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | sort | uniq -c | sort -rn | head -30 || true
             echo "== total de erros =="; grep -c "error:" build.log 2>/dev/null || echo 0
           } 2>&1 | tee resumo.txt
 
@@ -132,3 +132,5 @@ jobs:
             resumo.txt
             inventario.txt
             deps.log
+            configure.log
+            build.log
