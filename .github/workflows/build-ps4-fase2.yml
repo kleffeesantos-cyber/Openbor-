@@ -58,6 +58,34 @@ jobs:
           printf '#if __has_include_next(<features.h>)\n#include_next <features.h>\n#endif\n' > sh/features.h
           printf '#if __has_include_next(<malloc.h>)\n#include_next <malloc.h>\n#else\n#include <stdlib.h>\n#endif\n' > sh/malloc.h
 
+      - name: Codigo de inicio do PS4
+        run: |
+          cat > ps4_boot.c << 'EOF'
+          #include <stdio.h>
+          #include <unistd.h>
+          #include <sys/stat.h>
+          #include <sys/types.h>
+          extern int __real_SDL_main(int argc, char **argv);
+          static void L(const char *m) {
+            FILE *f = fopen("/data/openbor/boot.txt", "a");
+            if (f) { fputs(m, f); fputc('\n', f); fclose(f); }
+          }
+          int __wrap_SDL_main(int argc, char **argv) {
+            mkdir("/data/openbor", 0777);
+            mkdir("/data/openbor/Paks", 0777);
+            mkdir("/data/openbor/Logs", 0777);
+            mkdir("/data/openbor/Saves", 0777);
+            mkdir("/data/openbor/ScreenShots", 0777);
+            chdir("/data/openbor");
+            L("boot: antes do OpenBOR");
+            int r = __real_SDL_main(argc, argv);
+            char b[64];
+            snprintf(b, sizeof b, "boot: OpenBOR terminou com %d", r);
+            L(b);
+            return r;
+          }
+          EOF
+
       - name: Configurar OpenBOR
         id: cfg
         continue-on-error: true
@@ -65,10 +93,11 @@ jobs:
           git clone -q --depth 1 https://github.com/DCurrent/openbor openbor-src
           sed -i 's/mallinfo2()\.arena/0/' openbor-src/engine/source/utils.c
           sed -i '/#error datetime.c currently supports/d' openbor-src/engine/source/openborscript/datetime.c
+          echo "target_sources(OpenBOR PRIVATE \"$GITHUB_WORKSPACE/ps4_boot.c\")" >> openbor-src/CMakeLists.txt
           O="$OO_PS4_TOOLCHAIN"
           CF="-nostdlibinc -fPIC -funwind-tables -isysroot $O -isystem $GITHUB_WORKSPACE/sh -isystem $O/include -isystem $O/include/SDL2 -include sys/time.h"
           LIBS="-Wl,-Bdynamic -lc -lkernel -lc++ -lSceUserService -lSceVideoOut -lSceAudioOut -lScePad -lSceSysmodule -lSceFreeType"
-          LD="-fuse-ld=lld -nostdlib -Wl,-m,elf_x86_64 -Wl,-pie -Wl,--script,$O/link.x -Wl,--eh-frame-hdr -L$O/lib $O/lib/crt1.o"
+          LD="-fuse-ld=lld -nostdlib -Wl,-m,elf_x86_64 -Wl,-pie -Wl,--wrap=SDL_main -Wl,--script,$O/link.x -Wl,--eh-frame-hdr -L$O/lib $O/lib/crt1.o"
           cmake -S openbor-src -B openbor-src/build -G Ninja -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/ps4/toolchain.cmake -DCMAKE_PREFIX_PATH=$O -DCMAKE_C_FLAGS="$CF" -DCMAKE_C_STANDARD_LIBRARIES="$LIBS" -DCMAKE_EXE_LINKER_FLAGS="$LD" -DBUILD_LINUX=ON -DUSE_OPENGL=OFF -DUSE_LOADGL=OFF -DUSE_WEBM=OFF -DUSE_GFX=ON -DUSE_PTHREAD=OFF -DENABLE_STATIC_SDL=ON 2>&1 | tee configure.log
 
       - name: Compilar OpenBOR
@@ -116,11 +145,10 @@ jobs:
         run: |
           set +e
           R=resumo.txt
-          grep -E "error:|undefined|ld.lld|cannot" build.log | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | sort | uniq -c | sort -rn | head -30 > $R
+          grep -E "error:|undefined|ld.lld|cannot" build.log | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | sort | uniq -c | sort -rn | head -20 > $R
           echo "== executavel ==" >> $R
           ls -la openbor-src/build/OpenBOR >> $R 2>&1
-          echo "== pkg ==" >> $R
-          tail -25 pkg.log >> $R 2>&1
+          ls -la out >> $R 2>&1
           cat $R
 
       - uses: actions/upload-artifact@v4
@@ -130,7 +158,6 @@ jobs:
           path: |
             resumo.txt
             pkg.log
-            configure.log
             build.log
             out/*.pkg
             out/eboot.bin
