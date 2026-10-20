@@ -65,12 +65,12 @@ jobs:
           #include <unistd.h>
           #include <sys/stat.h>
           #include <sys/types.h>
-          extern int __real_SDL_main(int argc, char **argv);
+          extern int __real_main(int argc, char **argv);
           static void L(const char *m) {
             FILE *f = fopen("/data/openbor/boot.txt", "a");
             if (f) { fputs(m, f); fputc('\n', f); fclose(f); }
           }
-          int __wrap_SDL_main(int argc, char **argv) {
+          int __wrap_main(int argc, char **argv) {
             mkdir("/data/openbor", 0777);
             mkdir("/data/openbor/Paks", 0777);
             mkdir("/data/openbor/Logs", 0777);
@@ -78,7 +78,7 @@ jobs:
             mkdir("/data/openbor/ScreenShots", 0777);
             chdir("/data/openbor");
             L("boot: antes do OpenBOR");
-            int r = __real_SDL_main(argc, argv);
+            int r = __real_main(argc, argv);
             char b[64];
             snprintf(b, sizeof b, "boot: OpenBOR terminou com %d", r);
             L(b);
@@ -97,7 +97,7 @@ jobs:
           O="$OO_PS4_TOOLCHAIN"
           CF="-nostdlibinc -fPIC -funwind-tables -isysroot $O -isystem $GITHUB_WORKSPACE/sh -isystem $O/include -isystem $O/include/SDL2 -include sys/time.h"
           LIBS="-Wl,-Bdynamic -lc -lkernel -lc++ -lSceUserService -lSceVideoOut -lSceAudioOut -lScePad -lSceSysmodule -lSceFreeType"
-          LD="-fuse-ld=lld -nostdlib -Wl,-m,elf_x86_64 -Wl,-pie -Wl,--wrap=SDL_main -Wl,--script,$O/link.x -Wl,--eh-frame-hdr -L$O/lib $O/lib/crt1.o"
+          LD="-fuse-ld=lld -nostdlib -Wl,-m,elf_x86_64 -Wl,-pie -Wl,--wrap=main -Wl,--script,$O/link.x -Wl,--eh-frame-hdr -L$O/lib $O/lib/crt1.o"
           cmake -S openbor-src -B openbor-src/build -G Ninja -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/ps4/toolchain.cmake -DCMAKE_PREFIX_PATH=$O -DCMAKE_C_FLAGS="$CF" -DCMAKE_C_STANDARD_LIBRARIES="$LIBS" -DCMAKE_EXE_LINKER_FLAGS="$LD" -DBUILD_LINUX=ON -DUSE_OPENGL=OFF -DUSE_LOADGL=OFF -DUSE_WEBM=OFF -DUSE_GFX=ON -DUSE_PTHREAD=OFF -DENABLE_STATIC_SDL=ON 2>&1 | tee configure.log
 
       - name: Compilar OpenBOR
