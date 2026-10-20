@@ -67,14 +67,48 @@ jobs:
           sed -i '/#error datetime.c currently supports/d' openbor-src/engine/source/openborscript/datetime.c
           O="$OO_PS4_TOOLCHAIN"
           CF="-nostdlibinc -fPIC -funwind-tables -isysroot $O -isystem $GITHUB_WORKSPACE/sh -isystem $O/include -isystem $O/include/SDL2 -include sys/time.h"
-          LIBS="-lc -lkernel -lc++ -lSceUserService -lSceVideoOut -lSceAudioOut -lScePad -lSceSysmodule -lSceFreeType"
-          LD="-fuse-ld=lld -nostdlib -Wl,-m,elf_x86_64 -Wl,-pie -Wl,--script,$O/link.x -Wl,--eh-frame-hdr -L$O/lib -L$GITHUB_WORKSPACE/oo/lib $O/lib/crt1.o"
+          LIBS="-Wl,-Bdynamic -lc -lkernel -lc++ -lSceUserService -lSceVideoOut -lSceAudioOut -lScePad -lSceSysmodule -lSceFreeType"
+          LD="-fuse-ld=lld -nostdlib -Wl,-m,elf_x86_64 -Wl,-pie -Wl,--script,$O/link.x -Wl,--eh-frame-hdr -L$O/lib $O/lib/crt1.o"
           cmake -S openbor-src -B openbor-src/build -G Ninja -DCMAKE_TOOLCHAIN_FILE=$GITHUB_WORKSPACE/ps4/toolchain.cmake -DCMAKE_PREFIX_PATH=$O -DCMAKE_C_FLAGS="$CF" -DCMAKE_C_STANDARD_LIBRARIES="$LIBS" -DCMAKE_EXE_LINKER_FLAGS="$LD" -DBUILD_LINUX=ON -DUSE_OPENGL=OFF -DUSE_LOADGL=OFF -DUSE_WEBM=OFF -DUSE_GFX=OFF -DUSE_PTHREAD=OFF -DENABLE_STATIC_SDL=ON 2>&1 | tee configure.log
 
       - name: Compilar OpenBOR
         if: steps.cfg.outcome == 'success'
         continue-on-error: true
         run: cmake --build openbor-src/build -- -k 0 2>&1 | tee build.log
+
+      - name: Empacotar PKG
+        if: always()
+        continue-on-error: true
+        run: |
+          set +e
+          B="$OO_PS4_TOOLCHAIN/bin/linux"
+          chmod +x $B/* 2>/dev/null
+          export DOTNET_SYSTEM_GLOBALIZATION_INVARIANT=1
+          if [ ! -f openbor-src/build/OpenBOR ]; then echo "sem executavel, nada a empacotar" > pkg.log; exit 0; fi
+          {
+            CID="IV0000-OPBR00001_00-OPENBORPS4000000"
+            mkdir -p out/sce_sys out/sce_module
+            cd out
+            cp ../openbor-src/build/OpenBOR OpenBOR.elf
+            cp $(find ../oo -type d -name sce_module | head -1)/*.prx sce_module/
+            cp $(find ../oo/samples/hello_world -name icon0.png | head -1) sce_sys/icon0.png
+            $B/create-fself -in=OpenBOR.elf -out=OpenBOR.oelf --eboot eboot.bin --paid 0x3800000000000011
+            S="$B/PkgTool.Core sfo_setentry sce_sys/param.sfo"
+            $B/PkgTool.Core sfo_new sce_sys/param.sfo
+            $S APP_TYPE --type Integer --maxsize 4 --value 1
+            $S APP_VER --type Utf8 --maxsize 8 --value '01.00'
+            $S ATTRIBUTE --type Integer --maxsize 4 --value 0
+            $S CATEGORY --type Utf8 --maxsize 4 --value 'gd'
+            $S CONTENT_ID --type Utf8 --maxsize 48 --value "$CID"
+            $S DOWNLOAD_DATA_SIZE --type Integer --maxsize 4 --value 0
+            $S SYSTEM_VER --type Integer --maxsize 4 --value 0
+            $S TITLE --type Utf8 --maxsize 128 --value 'OpenBOR'
+            $S TITLE_ID --type Utf8 --maxsize 12 --value 'OPBR00001'
+            $S VERSION --type Utf8 --maxsize 8 --value '01.00'
+            $B/create-gp4 -out pkg.gp4 --content-id=$CID --files "eboot.bin sce_sys/param.sfo sce_sys/icon0.png $(ls sce_module/*.prx | tr '\n' ' ')"
+            $B/PkgTool.Core pkg_build pkg.gp4 .
+            ls -la
+          } 2>&1 | tee ../pkg.log
 
       - name: Resumo
         if: always()
@@ -83,12 +117,10 @@ jobs:
           set +e
           R=resumo.txt
           grep -E "error:|undefined|ld.lld|cannot" build.log | sed -E 's#/home/runner/work/[^ ]*/openbor-src/##' | sort | uniq -c | sort -rn | head -30 > $R
-          echo "== arquivos de sistema do PS4 (stubs) ==" >> $R
-          find tc oo -name "libkernel*" -o -name "libSceVideoOut*" -o -name "libScePad*" 2>/dev/null | head -12 >> $R
-          echo "== lib do tc ==" >> $R
-          ls $OO_PS4_TOOLCHAIN/lib | head -50 >> $R
-          echo "== resultado ==" >> $R
+          echo "== executavel ==" >> $R
           ls -la openbor-src/build/OpenBOR >> $R 2>&1
+          echo "== pkg ==" >> $R
+          tail -25 pkg.log >> $R 2>&1
           cat $R
 
       - uses: actions/upload-artifact@v4
@@ -97,5 +129,8 @@ jobs:
           name: logs-fase2
           path: |
             resumo.txt
+            pkg.log
             configure.log
             build.log
+            out/*.pkg
+            out/eboot.bin
